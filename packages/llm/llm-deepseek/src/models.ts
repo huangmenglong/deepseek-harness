@@ -17,9 +17,6 @@
 import { attributionHeaders, LlmError } from '@deepseek-ai/dsh-llm'
 import type { LlmDiscoveredModel } from '@deepseek-ai/dsh-llm'
 
-/** Endpoint replies larger than this are refused rather than partially parsed. */
-const MAX_RESPONSE_BYTES = 4 * 1024 * 1024
-
 /** One entry of an OpenAI-compatible `GET /v1/models` reply. */
 interface ListingEntry {
   id?: unknown
