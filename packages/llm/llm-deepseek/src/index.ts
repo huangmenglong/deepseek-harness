@@ -40,6 +40,11 @@ import {
   DeepSeekAdapter,
 } from './adapter.ts'
 import type { DeepSeekCatalogModel, DeepSeekConnectionOptions } from './adapter.ts'
+import {
+  DEFAULT_MODEL_BLACKLIST,
+  discoverModels as discoverDeepSeekModels,
+  normaliseBlacklist,
+} from './models.ts'
 
 export {
   DEFAULT_CONTEXT_WINDOW,
@@ -79,19 +84,15 @@ const NS = settingsNamespace('llm-deepseek')
 const DEFAULT_API_KEY_ENV = 'DEEPSEEK_API_KEY'
 /** The single provider route this plugin owns. */
 const PROVIDER = 'deepseek-official'
+/** Env override for the model blacklist (comma-separated ids / `prefix*` rules). */
+const MODEL_BLACKLIST_ENV = 'DSH_MODEL_BLACKLIST'
 
-const DEFAULT_MODELS: DeepSeekCatalogModel[] = [
-  { id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash', contextWindow: DEFAULT_CONTEXT_WINDOW },
-  { id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro', contextWindow: DEFAULT_CONTEXT_WINDOW },
-  {
-    id: 'deepseek-v4-flash-vision-exp',
-    name: 'DeepSeek-V4-Flash-Vision-Exp',
-    contextWindow: DEFAULT_CONTEXT_WINDOW,
-    inputModalities: ['text', 'image'],
-    imagePixelBudget: DEFAULT_REQUEST_IMAGE_PIXEL_BUDGET,
-    imageMaxBytes: DEFAULT_REQUEST_IMAGE_MAX_BYTES,
-  },
-]
+/**
+ * The static catalog is empty: the selector model list is fetched from the
+ * configured endpoint (`DEEPSEEK_BASE_URL`) at runtime and filtered by the
+ * blacklist, so the built-in DeepSeek models no longer appear.
+ */
+const DEFAULT_MODELS: DeepSeekCatalogModel[] = []
 
 const MODEL_MODALITIES = ['text', 'image'] as const satisfies readonly ModelModality[]
 
@@ -116,8 +117,13 @@ export interface Config {
   maxTokens?: number
   /** Positive context capacity used when the selected model has no exact value (default 1,000,000). */
   defaultContextWindow?: number
-  /** Advisory models shown by discovery consumers; defaults to V4 Flash, V4 Pro, and V4 Flash Vision Exp. */
+  /** Advisory models shown by discovery consumers; defaults to the live endpoint catalog. */
   models?: DeepSeekCatalogModel[]
+  /**
+   * Model-id patterns hidden from the selector (exact id or trailing `*` prefix).
+   * Defaults to {@link DEFAULT_MODEL_BLACKLIST}; `DSH_MODEL_BLACKLIST` overrides.
+   */
+  modelBlacklist?: string[]
   /** Maximum provider idle time while one stream read is outstanding (default five minutes). */
   streamIdleTimeoutMs?: number
   /** Maximum accumulated file-referenced image bytes per chat request (default 128 MiB). */
@@ -164,6 +170,7 @@ export const Config: z<Config> = z.object({
   maxTokens: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(DEFAULT_MAX_TOKENS),
   defaultContextWindow: z.number().step(1).min(1).default(DEFAULT_CONTEXT_WINDOW),
   models: z.array(catalogModel).default(DEFAULT_MODELS),
+  modelBlacklist: z.array(z.string()).default([...DEFAULT_MODEL_BLACKLIST]),
   streamIdleTimeoutMs: z.number().min(Number.MIN_VALUE).max(MAX_TIMER_DELAY_MS).default(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
   maxRequestFilesBytes: z.number().step(1).min(1).default(DEFAULT_MAX_REQUEST_FILES_BYTES),
   maxInlineRequestImageBytes: z.number().step(1).min(1).default(DEFAULT_MAX_INLINE_REQUEST_IMAGE_BYTES),
@@ -258,6 +265,18 @@ function resolveModels(models: readonly DeepSeekCatalogModel[] | undefined): Dee
         : {},
     }
   })
+}
+
+/** Resolve the model blacklist: `DSH_MODEL_BLACKLIST` env wins, else the config field. */
+function resolveModelBlacklist(
+  config: Config,
+  environment?: LaunchEnvironmentSnapshot,
+): string[] {
+  const env = environment?.get(MODEL_BLACKLIST_ENV)?.value
+  const rules = env !== undefined && env.length > 0
+    ? env.split(',').map(rule => rule.trim())
+    : (config.modelBlacklist ?? DEFAULT_MODEL_BLACKLIST)
+  return normaliseBlacklist(rules)
 }
 
 /**
@@ -366,6 +385,7 @@ export function resolveAdapterOptions(config: Config, environment?: LaunchEnviro
     maxTokens: config.maxTokens ?? DEFAULT_MAX_TOKENS,
     defaultContextWindow: config.defaultContextWindow ?? DEFAULT_CONTEXT_WINDOW,
     models: resolveModels(config.models),
+    modelBlacklist: resolveModelBlacklist(config, environment),
     streamIdleTimeoutMs,
     maxRequestFilesBytes,
     maxInlineRequestImageBytes,
@@ -442,6 +462,23 @@ export function apply(ctx: Context, config: Config): void {
   ctx.llm.registerConfigurableProviders([
     { provider: PROVIDER, displayName: 'DeepSeek', settingsNs: NS, settingsPath: [] },
   ])
+  // Offer "fetch available models": interrogate the configured endpoint's
+  // OpenAI-compatible `GET /v1/models`, honouring the model blacklist.
+  ctx.llm.registerModelDiscovery(NS, async (request) => {
+    const opts = options()
+    const baseURL = request.baseURL ?? opts.baseURL
+    let apiKey = request.apiKey
+    if (apiKey === undefined) {
+      try {
+        apiKey = await resolveApiKey(opts)
+      } catch {
+        // A missing credential is an unauthenticated probe; the listing may
+        // still answer, and the discovery surface reports a failure gracefully.
+        apiKey = undefined
+      }
+    }
+    return discoverDeepSeekModels(baseURL, apiKey, opts.modelBlacklist, request.signal)
+  })
   // Route effects bind to this apply fiber via the stable `ctx` reference,
   // even when a swap runs inside the scoped settings callback below.
   const registration = ctx.llm.registerAdapter([PROVIDER], adapter)
