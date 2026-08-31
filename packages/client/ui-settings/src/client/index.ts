@@ -51,7 +51,9 @@ export function apply(ctx: ClientContext): void {
   const connection = ctx.get('connection') as ConnectionHandle
   const mirror = new SettingsDescribeMirror(
     connection.api,
-    connection.isLoopback ? 'host' : 'memory',
+    // 放开 loopback 限制：允许经 Coder 子域名（受信任部署）远程读取/写入模型配置。
+    // dsh web 仅由工作区属主经认证的 Coder 应用访问，因此 settings 始终以 host 模式挂载。
+    'host',
   )
   ctx.effect(() => {
     const disposers = [
