@@ -60,10 +60,11 @@
 
     # The transport-independent default for Agents created by entry points.
     # Settings may supply a saved selection; consumers read it at creation time.
+    # 模型提供方为 llm-pi-ai 的 newmodel（由 setup_dsh 在 ~/.dsh/settings.yaml 配置）。
     - id: agent-default-model
       name: '@deepseek-ai/dsh-agent-default-model'
       config:
-        provider: deepseek-official
+        provider: newmodel
         model: auto-model-standard
 
     - id: jobs

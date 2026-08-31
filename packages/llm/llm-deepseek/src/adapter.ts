@@ -32,7 +32,6 @@ import { deadline, idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
 import type { AnonymousUserId } from '@deepseek-ai/dsh-anonymous-user-id'
 import { serializeRequest, serializeRequestWithImages } from './serialize.ts'
 import type { ImageWireLocation, RequestDefaults } from './serialize.ts'
-import { discoverModels } from './models.ts'
 import { DeepSeekFileStore } from './file-store.ts'
 import type { DeepSeekFilePolicy } from './file-store.ts'
 import type { DeepSeekFileId } from './file-id.ts'
@@ -356,7 +355,6 @@ export function httpErrorCode(status: number, error?: WireError['error']): strin
  */
 export class DeepSeekAdapter extends LlmAdapter {
   private readonly files: DeepSeekFileStore
-  private catalogCache?: readonly DeepSeekCatalogModel[]
 
   constructor(private readonly config: DeepSeekAdapterOptions) {
     super()
@@ -371,46 +369,10 @@ export class DeepSeekAdapter extends LlmAdapter {
     return this.config.options().retryPolicy
   }
 
-  /**
-   * The selector catalog: the endpoint's advertised models, minus the
-   * blacklist. Fetched once and cached; a listing failure falls back to the
-   * configured (unmodeled) catalog so the selector never disappears.
-   */
-  private async loadCatalog(): Promise<readonly DeepSeekCatalogModel[]> {
-    if (this.catalogCache !== undefined) return this.catalogCache
-    const connection = this.config.options()
-    let apiKey: string | undefined
-    try {
-      apiKey = await this.config.resolveApiKey(connection)
-    } catch {
-      // No usable credential is an unauthenticated probe; the model listing
-      // may still answer, and the fallback below keeps the selector usable.
-      apiKey = undefined
-    }
-    let catalog: DeepSeekCatalogModel[]
-    try {
-      const discovered = await discoverModels(
-        connection.baseURL,
-        apiKey,
-        connection.modelBlacklist,
-      )
-      catalog = discovered.map(model => ({
-        id: model.id,
-        ...model.name === undefined ? {} : { name: model.name },
-        ...model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow },
-        ...model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens },
-      }))
-    } catch {
-      // Swallow a listing failure and fall back to the static catalog, so a
-      // temporarily unreachable endpoint does not blank the selection.
-      catalog = [...connection.models]
-    }
-    this.catalogCache = catalog
-    return catalog
-  }
-
-  override async listModels(provider: string): Promise<readonly LlmModelInfo[]> {
-    return (await this.loadCatalog()).map(model => modelInfo(provider, model))
+  // deepseek-official 提供方不参与模型选择器（模型由 llm-pi-ai 的 newmodel 提供），
+  // 因此目录固定为空；搜索等内部用途仍可经该路由发出请求。
+  override listModels(_provider: string): Promise<readonly LlmModelInfo[]> {
+    return Promise.resolve([])
   }
 
   override resolveModel(
