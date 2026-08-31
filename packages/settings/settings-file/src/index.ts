@@ -237,6 +237,7 @@ export class FileSettingsProvider extends SettingsProvider {
     const watcher = this.spec.watch
       ? chokidarWatch(await canonicalizeWatchPath(this.spec.filename), {
         ignoreInitial: true,
+        ignored: ['**/node_modules/**'],
         awaitWriteFinish: {
           stabilityThreshold: this.spec.debounceMs,
           pollInterval: Math.max(1, Math.min(this.spec.debounceMs, 10)),

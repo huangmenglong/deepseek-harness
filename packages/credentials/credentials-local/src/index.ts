@@ -584,6 +584,7 @@ export class LocalCredentialProvider extends CredentialProvider {
        lifecycle contract, not accidental repetition. */
     const watcher = chokidarWatch(await canonicalizeWatchPath(this.spec.filename), {
       ignoreInitial: true,
+      ignored: ['**/node_modules/**'],
       awaitWriteFinish: {
         stabilityThreshold: this.spec.debounceMs,
         pollInterval: Math.max(1, Math.min(this.spec.debounceMs, 10)),

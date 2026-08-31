@@ -490,6 +490,7 @@ class SkillWatchManager {
       // this provider's effect explicitly closes every handle at teardown.
       persistent: true,
       ignoreInitial: true,
+      ignored: ['**/node_modules/**'],
       depth: 1,
       followSymlinks: this.config.followSymlinks,
       atomic: true,
